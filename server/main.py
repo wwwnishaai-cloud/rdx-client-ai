@@ -159,12 +159,17 @@ async def chat_endpoint(
 
     async def generate():
         full_response = ""
+        jwt_token = request.headers.get("Authorization")
+        if jwt_token and jwt_token.startswith("Bearer "):
+            jwt_token = jwt_token.split(" ")[1]
+
         try:
             async for chunk in chat_engine.chat_stream(
                 messages=messages_for_ai,
                 db=db,
                 user_api_key=req.user_api_key or user_record.api_key_encrypted,
                 model=model_used,
+                jwt_token=jwt_token,
             ):
                 full_response += chunk
                 yield f"data: {json.dumps({'content': chunk})}\n\n"

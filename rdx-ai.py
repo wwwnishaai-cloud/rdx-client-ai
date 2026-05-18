@@ -270,163 +270,295 @@ async def chat_loop(config):
 
 # ── Commands ────────────────────────────────────────────
 async def handle_cmd(cmd, config):
-    parts = cmd.split(maxsplit=1)
+    parts = cmd.split()
     command = parts[0].lower()
-    arg = parts[1] if len(parts) > 1 else None
+    args = parts[1:]
+
+    def get_headers():
+        return {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
 
     if command == '/help':
         print(f"""
-{C.BOLD}Commands:{C.RESET}
+{C.BOLD}Base Commands:{C.RESET}
   {C.CYAN}/help{C.RESET}          — Show this help
   {C.CYAN}/api <key>{C.RESET}     — Set/change API key
-  {C.CYAN}/api{C.RESET}           — Show current API key
-  {C.CYAN}/models{C.RESET}        — List all available models on OpenCode
-  {C.CYAN}/model <name>{C.RESET}  — Switch to a specific model
-  {C.CYAN}/model{C.RESET}         — Choose available models interactively
+  {C.CYAN}/models{C.RESET}        — List available models
+  {C.CYAN}/model <name>{C.RESET}  — Switch model
   {C.CYAN}/history{C.RESET}       — Show chat history
   {C.CYAN}/clear{C.RESET}         — Clear session
-  {C.CYAN}/status{C.RESET}        — Server status
   {C.CYAN}/account{C.RESET}       — Account info
   {C.CYAN}/logout{C.RESET}        — Logout
   {C.CYAN}exit{C.RESET}           — Exit
+
+{C.BOLD}Dashboard & Analytics:{C.RESET}
+  {C.CYAN}/stats{C.RESET}         — View dashboard stats
+  {C.CYAN}/analytics{C.RESET}     — View analytics charts
+  {C.CYAN}/logs{C.RESET}          — View activity logs
+  {C.CYAN}/profile{C.RESET}       — View your profile
+  {C.CYAN}/messages{C.RESET}      — View unread messages
+
+{C.BOLD}App Management:{C.RESET}
+  {C.CYAN}/apps{C.RESET}          — List all apps
+  {C.CYAN}/app-create <n>{C.RESET}— Create app
+  {C.CYAN}/app-delete <id>{C.RESET}— Delete app by ID
+
+{C.BOLD}License Management:{C.RESET}
+  {C.CYAN}/licenses{C.RESET}      — List licenses
+  {C.CYAN}/keygen <app_id> <days>{C.RESET} — Generate key
+  {C.CYAN}/bulk-keygen <id> <days> <amt>{C.RESET} — Bulk gen
+  {C.CYAN}/key-delete <id>{C.RESET} — Delete license
+  
+{C.BOLD}Member Management:{C.RESET}
+  {C.CYAN}/members{C.RESET}       — List members
+  {C.CYAN}/member-create <user> <pass> <app_id>{C.RESET}
+  {C.CYAN}/member-delete <id>{C.RESET} — Delete user
+  {C.CYAN}/member-ban <id> <reason>{C.RESET} — Ban user
+  {C.CYAN}/extend-sub <id> <days>{C.RESET} — Extend sub
+
+{C.BOLD}Discord Integration:{C.RESET}
+  {C.CYAN}/discord-link <id>{C.RESET} — Link Discord ID
+  {C.CYAN}/discord-send <tgt> <msg>{C.RESET} — Send Discord msg
 """)
 
     elif command == '/api':
-        if arg:
-            config["api_key"] = arg
+        if args:
+            config["api_key"] = args[0]
             save_config(config)
             ok("API key updated!")
         else:
             key = config.get("api_key")
             if key:
-                masked = key[:8] + "..." + key[-4:]
-                info(f"API key: {masked}")
+                info(f"API key: {key[:8] + '...' + key[-4:]}")
             else:
-                info("No API key set. Using default.")
+                info("No API key set.")
 
     elif command == '/models':
         info("Fetching available models from OpenCode...")
         async with httpx.AsyncClient(timeout=10) as client:
             try:
-                headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
-                resp = await client.get(f"{AI_SERVER}/models", headers=headers)
-                if resp.status_code != 200:
-                    err(f"Server returned status {resp.status_code}")
-                    return
+                resp = await client.get(f"{AI_SERVER}/models", headers=get_headers())
                 data = resp.json()
                 models = data.get("models", [])
                 if not models:
-                    info("No models returned from server.")
+                    info("No models returned.")
                 else:
-                    print(f"\n{C.BOLD}{C.CYAN}Available Models on OpenCode:{C.RESET}")
+                    print(f"\n{C.BOLD}{C.CYAN}Available Models:{C.RESET}")
                     for idx, model in enumerate(models, 1):
                         is_current = " (Active)" if config.get("model") == model else ""
                         print(f"  {C.BOLD}{idx}{C.RESET}. {model}{C.GREEN}{is_current}{C.RESET}")
-                    print(f"\n{C.DIM}Type '/model <name>' or run '/model' to switch!{C.RESET}")
             except Exception as e:
                 err(f"Failed to fetch models: {e}")
 
     elif command == '/model':
-        if arg:
-            config["model"] = arg
+        if args:
+            config["model"] = args[0]
             save_config(config)
-            # Persist on server DB so server uses it
             async with httpx.AsyncClient(timeout=10) as client:
                 try:
-                    headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
-                    await client.post(f"{AI_SERVER}/model/switch", json={"model": arg}, headers=headers)
-                except Exception:
-                    pass
-            ok(f"Model switched to: {arg}")
+                    await client.post(f"{AI_SERVER}/model/switch", json={"model": args[0]}, headers=get_headers())
+                except: pass
+            ok(f"Model switched to: {args[0]}")
         else:
-            info("Fetching available models from OpenCode...")
-            async with httpx.AsyncClient(timeout=10) as client:
-                try:
-                    headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
-                    resp = await client.get(f"{AI_SERVER}/models", headers=headers)
-                    if resp.status_code != 200:
-                        err(f"Server returned status {resp.status_code}: {resp.text[:120]}")
-                        return
-                    data = resp.json()
-                    models = data.get("models", [])
-                    if not models:
-                        info("No models returned from server.")
-                        return
-                    
-                    print(f"\n{C.BOLD}{C.CYAN}Select a Model to Switch:{C.RESET}")
-                    active_model = config.get("model")
-                    for idx, model in enumerate(models, 1):
-                        is_current = f" {C.GREEN}(Active){C.RESET}" if active_model == model else ""
-                        print(f"  {C.BOLD}{idx}{C.RESET}. {model}{is_current}")
-                    
-                    choice = ask("\nEnter number (or press Enter to keep current): ")
-                    if choice.strip():
-                        try:
-                            choice_idx = int(choice) - 1
-                            if 0 <= choice_idx < len(models):
-                                new_model = models[choice_idx]
-                                config["model"] = new_model
-                                save_config(config)
-                                # Persist on server DB
-                                try:
-                                    await client.post(f"{AI_SERVER}/model/switch", json={"model": new_model}, headers=headers)
-                                except Exception:
-                                    pass
-                                ok(f"Model switched to: {C.BOLD}{new_model}{C.RESET}")
-                            else:
-                                err("Invalid choice.")
-                        except ValueError:
-                            err("Invalid input. Please enter a number.")
-                except Exception as e:
-                    err(f"Failed to fetch models: {e}")
+            info("Use /model <name> to switch.")
 
-    elif command == '/status':
+    elif command == '/history':
         async with httpx.AsyncClient(timeout=10) as client:
             try:
-                resp = await client.get(f"{AI_SERVER}/status")
+                resp = await client.get(f"{AI_SERVER}/history", headers=get_headers())
                 data = resp.json()
-                info(f"Server: {json.dumps(data, indent=2)}")
+                messages = data.get("messages", [])
+                for msg in messages[-10:]:
+                    role = "You" if msg.get("role") == "user" else "RDX AI"
+                    print(f"  {C.DIM}{msg.get('created_at', '')}{C.RESET} [{role}] {msg.get('content', '')[:100]}")
             except Exception as e:
-                err(f"Cannot reach server: {e}")
+                err(str(e))
+
+    elif command == '/clear':
+        ok("Session cleared.")
 
     elif command == '/account':
-        info(f"Username: {config.get('username', 'Unknown')}")
-        info(f"User ID: {config.get('user_id', 'Unknown')}")
+        info(f"Username: {config.get('username')}")
+        info(f"User ID: {config.get('user_id')}")
 
     elif command == '/logout':
         confirm = ask("Are you sure? (y/n): ")
         if confirm.lower() == 'y':
             if os.path.exists(CONFIG_FILE):
                 os.remove(CONFIG_FILE)
-                ok("Logged out. Restart to re-authenticate.")
+            ok("Logged out. Restart to re-authenticate.")
 
-    elif command == '/history':
-        info("Fetching history...")
+    # --- Dashboard Commands ---
+    elif command == '/stats':
         async with httpx.AsyncClient(timeout=10) as client:
             try:
-                resp = await client.get(f"{AI_SERVER}/history",
-                    headers={"Authorization": f"Bearer {config.get('jwt_token', '')}"})
-                if resp.status_code != 200:
-                    err_text = resp.text
-                    if resp.status_code in (502, 503) or "<html" in err_text.lower():
-                        err("AI Server is waking up from sleep mode. Please wait a few seconds and try again!")
-                    else:
-                        err(f"Server returned status {resp.status_code}")
-                    return
-                data = resp.json()
-                messages = data.get("messages", [])
-                if not messages:
-                    info("No history found.")
-                else:
-                    for msg in messages[-10:]:
-                        role = "You" if msg.get("role") == "user" else "RDX AI"
-                        print(f"  {C.DIM}{msg.get('created_at', '')}{C.RESET} [{role}] {msg.get('content', '')[:100]}")
-            except Exception as e:
-                err(str(e))
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/stats", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
 
-    elif command == '/clear':
-        session_token = None
-        ok("Session cleared.")
+    elif command == '/analytics':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/analytics", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/logs':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/logs", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/profile':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/auth/me", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+            
+    elif command == '/messages':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/messages", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    # --- App Management ---
+    elif command == '/apps':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/apps", headers=get_headers())
+                data = resp.json()
+                if data.get('success'):
+                    apps = data.get('data', [])
+                    print(f"\n{C.BOLD}{C.CYAN}Your Apps:{C.RESET}")
+                    for app in apps:
+                        print(f"  {C.BOLD}ID:{C.RESET} {app['id']} | {C.BOLD}Name:{C.RESET} {app['name']} | {C.BOLD}Key:{C.RESET} {app['owner_key']}")
+                else:
+                    err(data.get('message', 'Failed to fetch apps'))
+            except Exception as e: err(str(e))
+
+    elif command == '/app-create':
+        if not args:
+            err("Usage: /app-create <name>")
+            return
+        name = " ".join(args)
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/apps", json={"name": name}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/app-delete':
+        if not args: return err("Usage: /app-delete <id>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.delete(f"{MAIN_SERVER}/rdx/api/apps/{args[0]}", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    # --- License Management ---
+    elif command == '/licenses':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/licenses", headers=get_headers())
+                data = resp.json()
+                if data.get('success'):
+                    lics = data.get('data', [])
+                    print(f"\n{C.BOLD}{C.CYAN}Your Licenses:{C.RESET}")
+                    for lic in lics[:20]: # Show top 20
+                        print(f"  {C.BOLD}ID:{C.RESET} {lic['id']} | {C.BOLD}Key:{C.RESET} {lic['license_key']} | {C.BOLD}Status:{C.RESET} {lic['status']}")
+                else:
+                    err(data.get('message', 'Failed'))
+            except Exception as e: err(str(e))
+
+    elif command == '/keygen':
+        if len(args) < 2: return err("Usage: /keygen <app_id> <days>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/licenses/create", json={"app_id": args[0], "duration_days": int(args[1])}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/bulk-keygen':
+        if len(args) < 3: return err("Usage: /bulk-keygen <app_id> <days> <amount>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/licenses/bulk", json={"app_id": args[0], "duration_days": int(args[1]), "amount": int(args[2])}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/key-delete':
+        if not args: return err("Usage: /key-delete <id>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.delete(f"{MAIN_SERVER}/rdx/api/licenses/{args[0]}", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    # --- Member Management ---
+    elif command == '/members':
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.get(f"{MAIN_SERVER}/rdx/api/users", headers=get_headers())
+                data = resp.json()
+                if data.get('success'):
+                    users = data.get('data', [])
+                    print(f"\n{C.BOLD}{C.CYAN}Your Members:{C.RESET}")
+                    for u in users[:20]:
+                        print(f"  {C.BOLD}ID:{C.RESET} {u['id']} | {C.BOLD}User:{C.RESET} {u['username']} | {C.BOLD}Status:{C.RESET} {u['status']}")
+                else:
+                    err(data.get('message', 'Failed'))
+            except Exception as e: err(str(e))
+
+    elif command == '/member-create':
+        if len(args) < 3: return err("Usage: /member-create <username> <password> <app_id>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/users", json={"username": args[0], "password": args[1], "app_id": args[2], "duration": 30}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+            
+    elif command == '/member-delete':
+        if not args: return err("Usage: /member-delete <id>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.delete(f"{MAIN_SERVER}/rdx/api/users/{args[0]}", headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/member-ban':
+        if len(args) < 2: return err("Usage: /member-ban <user_id> <reason>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/users/ban", json={"user_id": args[0], "reason": " ".join(args[1:])}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/extend-sub':
+        if len(args) < 2: return err("Usage: /extend-sub <user_id> <days>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/users/extend", json={"user_id": args[0], "days": int(args[1])}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    # --- Discord Integration ---
+    elif command == '/discord-link':
+        if not args: return err("Usage: /discord-link <your_discord_id>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/auth/ai/discord-link", json={"discord_id": args[0]}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
+
+    elif command == '/discord-send':
+        if len(args) < 2: return err("Usage: /discord-send <channel_id> <message>")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(f"{MAIN_SERVER}/rdx/api/auth/ai/discord/send", json={"target": args[0], "message": " ".join(args[1:])}, headers=get_headers())
+                print(json.dumps(resp.json(), indent=2))
+            except Exception as e: err(str(e))
 
     else:
         err(f"Unknown command: {command}. Type /help")
