@@ -74,7 +74,7 @@ class OptionalAuth:
             return None
         try:
             return await verify_rdx_token(credentials.credentials)
-        except HTTPException:
+        except Exception:
             return None
 
 
