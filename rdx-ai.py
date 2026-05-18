@@ -304,15 +304,12 @@ async def main():
             err("Authentication failed. Please try again.")
             return
 
-        api_key = await do_api_key()
-        model = do_model()
-
         config = {
             "jwt_token": auth_data["jwt_token"],
             "user_id": auth_data["user_id"],
             "username": auth_data["username"],
-            "api_key": api_key,
-            "model": model,
+            "api_key": None,
+            "model": None,
             "server_url": AI_SERVER,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
