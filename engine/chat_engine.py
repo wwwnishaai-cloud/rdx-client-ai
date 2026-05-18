@@ -170,7 +170,7 @@ class ChatEngine:
     def _get_default_models(self) -> list:
         return [
             "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it",
+            "gpt-4o-mini",
+            "deepseek-reasoner",
+            "gemini-2.0-flash",
         ]
