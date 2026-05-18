@@ -97,44 +97,38 @@ async def chat_endpoint(
     user: dict = Depends(optional_auth),
     db: AsyncSession = Depends(get_session),
 ):
-    try:
-        if not user:
-            rdx_user_id = f"anon_{uuid.uuid4().hex[:12]}"
-            user_record = await get_or_create_ai_user(db, rdx_user_id, "Anonymous")
-        else:
-            rdx_user_id = user.get("sub") or user.get("id")
-            username = user.get("username") or user.get("name") or rdx_user_id
-            user_record = await get_or_create_ai_user(db, rdx_user_id, username)
+    if not user:
+        rdx_user_id = f"anon_{uuid.uuid4().hex[:12]}"
+        user_record = await get_or_create_ai_user(db, rdx_user_id, "Anonymous")
+    else:
+        rdx_user_id = user.get("sub") or user.get("id")
+        username = user.get("username") or user.get("name") or rdx_user_id
+        user_record = await get_or_create_ai_user(db, rdx_user_id, username)
 
-        session_token = req.session_token or uuid.uuid4().hex
-        session = await memory_manager.get_or_create_session(
-            db,
-            user_record.id,
-            session_token,
-            req.platform,
-            req.platform_user_id,
-        )
+    session_token = req.session_token or uuid.uuid4().hex
+    session = await memory_manager.get_or_create_session(
+        db,
+        user_record.id,
+        session_token,
+        req.platform,
+        req.platform_user_id,
+    )
 
-        await memory_manager.save_message(
-            db, session, "user", req.message, req.platform
-        )
+    await memory_manager.save_message(
+        db, session, "user", req.message, req.platform
+    )
 
-        history = await memory_manager.get_recent_history(
-            db, user_record.id, limit=10, platform=req.platform
-        )
+    history = await memory_manager.get_recent_history(
+        db, user_record.id, limit=10, platform=req.platform
+    )
 
-        messages_for_ai = [
-            {"role": m["role"], "content": m["content"]}
-            for m in history[:-1]
-        ]
-        messages_for_ai.append({"role": "user", "content": req.message})
+    messages_for_ai = [
+        {"role": m["role"], "content": m["content"]}
+        for m in history[:-1]
+    ]
+    messages_for_ai.append({"role": "user", "content": req.message})
 
-        model_used = req.model or user_record.preferred_model
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f"[CHAT_ENDPOINT_ERROR]: {tb}")
-        return PlainTextResponse(content=f"CHAT_ENDPOINT_CRASH:\n{tb}", status_code=500)
+    model_used = req.model or user_record.preferred_model
 
     async def generate():
         full_response = ""
