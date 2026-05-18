@@ -47,6 +47,7 @@ async def get_or_create_ai_user(
     rdx_user_id: str,
     username: str = None
 ) -> AIUser:
+    rdx_user_id = str(rdx_user_id)
     result = await db.execute(
         select(AIUser).where(AIUser.rdx_user_id == rdx_user_id)
     )
