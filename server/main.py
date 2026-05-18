@@ -305,9 +305,12 @@ async def get_settings(
 ):
     result = await db.execute(select(AISetting))
     settings_rows = result.scalars().all()
+    settings_dict = {s.setting_key: s.setting_value for s in settings_rows}
+    if 'default_api_key' in settings_dict:
+        settings_dict['api_key'] = settings_dict['default_api_key']
     return {
         "success": True,
-        "settings": {s.setting_key: s.setting_value for s in settings_rows},
+        "settings": settings_dict,
     }
 
 
@@ -318,15 +321,16 @@ async def update_settings(
     db: AsyncSession = Depends(get_session),
 ):
     for key, value in req.settings.items():
+        db_key = 'default_api_key' if key == 'api_key' else key
         result = await db.execute(
-            select(AISetting).where(AISetting.setting_key == key)
+            select(AISetting).where(AISetting.setting_key == db_key)
         )
         setting = result.scalar_one_or_none()
         if setting:
             setting.setting_value = str(value)
             setting.updated_at = datetime.utcnow()
         else:
-            setting = AISetting(setting_key=key, setting_value=str(value))
+            setting = AISetting(setting_key=db_key, setting_value=str(value))
             db.add(setting)
     await db.commit()
     chat_engine.invalidate_cache()
