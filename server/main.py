@@ -238,9 +238,11 @@ async def server_status():
 
 @app.get("/api/models")
 async def list_models(
+    api_base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
     db: AsyncSession = Depends(get_session),
 ):
-    models = await chat_engine.list_models(db)
+    models = await chat_engine.list_models(db, api_base_url=api_base_url, api_key=api_key)
     return {"success": True, "models": models}
 
 

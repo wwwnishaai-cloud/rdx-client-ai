@@ -142,22 +142,25 @@ class ChatEngine:
             full_response.append(chunk)
         return "".join(full_response)
 
-    async def list_models(self, db: Optional[AsyncSession] = None) -> list:
+    async def list_models(self, db: Optional[AsyncSession] = None, api_base_url: Optional[str] = None, api_key: Optional[str] = None) -> list:
         db_settings = await self._get_settings_from_db(db)
-        api_key = self._get_api_key(db_settings)
-        base_url = db_settings['api_base_url']
+        resolved_key = api_key if api_key else self._get_api_key(db_settings)
+        resolved_url = api_base_url if api_base_url else db_settings['api_base_url']
 
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{base_url}/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    f"{resolved_url}/models",
+                    headers={"Authorization": f"Bearer {resolved_key}"},
                     timeout=10.0,
                 )
                 if response.status_code == 200:
                     data = response.json()
                     return [m["id"] for m in data.get("data", [])]
-            except Exception:
+                else:
+                    print(f"[RDX CLIENT AI] Models API returned status {response.status_code}: {response.text}")
+            except Exception as e:
+                print(f"[RDX CLIENT AI] Error listing models: {e}")
                 pass
         return self._get_default_models()
 
