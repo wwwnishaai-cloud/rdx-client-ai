@@ -173,13 +173,44 @@ async def chat_loop(config):
             spinner_active = True
             async def spinner_animation():
                 spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                ascii_spinners = ["|", "/", "-", "\\"]
+                phrases = [
+                    "Thinking...",
+                    "Analyzing context...",
+                    "Reasoning...",
+                    "Solving...",
+                    "Formulating response...",
+                    "Structuring answer...",
+                    "Retrieving intelligence..."
+                ]
                 i = 0
+                use_ascii = False
                 while spinner_active:
-                    sys.stdout.write(f"{C.CYAN}{spinners[i % len(spinners)]}{C.RESET}")
-                    sys.stdout.flush()
+                    phrase = phrases[(i // 15) % len(phrases)]
+                    spinner_char = ascii_spinners[i % len(ascii_spinners)] if use_ascii else spinners[i % len(spinners)]
+                    text = f"{C.CYAN}{spinner_char}{C.RESET} {C.DIM}{phrase}{C.RESET}"
+                    try:
+                        sys.stdout.write(text)
+                        sys.stdout.flush()
+                    except UnicodeEncodeError:
+                        use_ascii = True
+                        spinner_char = ascii_spinners[i % len(ascii_spinners)]
+                        text = f"{C.CYAN}{spinner_char}{C.RESET} {C.DIM}{phrase}{C.RESET}"
+                        try:
+                            sys.stdout.write(text)
+                            sys.stdout.flush()
+                        except Exception:
+                            pass
+                    
                     await asyncio.sleep(0.1)
-                    sys.stdout.write("\b \b")
-                    sys.stdout.flush()
+                    
+                    # Erase exactly the printed characters
+                    erase_len = 2 + len(phrase)
+                    try:
+                        sys.stdout.write("\b" * erase_len + " " * erase_len + "\b" * erase_len)
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
                     i += 1
 
             spinner_task = asyncio.create_task(spinner_animation())
@@ -194,6 +225,8 @@ async def chat_loop(config):
                         try:
                             spinner_task.cancel()
                             await spinner_task
+                        except asyncio.CancelledError:
+                            pass
                         except Exception:
                             pass
 
@@ -228,6 +261,8 @@ async def chat_loop(config):
                     try:
                         spinner_task.cancel()
                         await spinner_task
+                    except asyncio.CancelledError:
+                        pass
                     except Exception:
                         pass
                     err(str(e))
