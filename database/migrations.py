@@ -69,6 +69,11 @@ async def init_db():
             VALUES ('rate_limit_premium', :val)
             ON CONFLICT (setting_key) DO NOTHING;
         """), {"val": str(settings.rate_limit_premium)})
+        conn.execute(text("""
+            INSERT INTO ai_settings (setting_key, setting_value)
+            VALUES ('force_user_key', 'true')
+            ON CONFLICT (setting_key) DO NOTHING;
+        """))
         conn.commit()
     sync_engine.dispose()
     print("[AI-DB] Default settings inserted.")

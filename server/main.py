@@ -15,7 +15,7 @@ from server.config import settings
 from server.auth import get_current_user, get_or_create_ai_user, optional_auth
 from database.migrations import init_db, get_session
 from database.models import AIUser, AISetting, AIDashboardAccess, AISession, AIMessage
-from engine.chat_engine import ChatEngine
+from engine.chat_engine import ChatEngine, UserAPIKeyRequiredError
 from engine.memory_manager import memory_manager
 
 chat_engine = ChatEngine()
@@ -137,13 +137,18 @@ async def chat_endpoint(
 
     async def generate():
         full_response = ""
-        async for chunk in chat_engine.chat_stream(
-            messages=messages_for_ai,
-            user_api_key=req.user_api_key or user_record.api_key_encrypted,
-            model=model_used,
-        ):
-            full_response += chunk
-            yield f"data: {json.dumps({'content': chunk})}\n\n"
+        try:
+            async for chunk in chat_engine.chat_stream(
+                messages=messages_for_ai,
+                db=db,
+                user_api_key=req.user_api_key or user_record.api_key_encrypted,
+                model=model_used,
+            ):
+                full_response += chunk
+                yield f"data: {json.dumps({'content': chunk})}\n\n"
+        except UserAPIKeyRequiredError as e:
+            yield f"data: {json.dumps({'error': str(e), 'code': 'API_KEY_REQUIRED'})}\n\n"
+            return
 
         await memory_manager.save_message(
             db, session, "assistant", full_response, req.platform, model_used
@@ -232,8 +237,10 @@ async def server_status():
 
 
 @app.get("/api/models")
-async def list_models():
-    models = await chat_engine.list_models()
+async def list_models(
+    db: AsyncSession = Depends(get_session),
+):
+    models = await chat_engine.list_models(db)
     return {"success": True, "models": models}
 
 
@@ -320,6 +327,7 @@ async def update_settings(
             setting = AISetting(setting_key=key, setting_value=str(value))
             db.add(setting)
     await db.commit()
+    chat_engine.invalidate_cache()
     return {"success": True, "message": "Settings updated"}
 
 
@@ -469,9 +477,7 @@ async def admin_get_stats(
 
     api_health = "OK"
     try:
-        from engine.chat_engine import ChatEngine
-        ce = ChatEngine()
-        await ce.list_models()
+        await chat_engine.list_models(db)
     except Exception:
         api_health = "FAIL"
 

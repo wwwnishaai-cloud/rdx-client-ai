@@ -1,34 +1,90 @@
 import json
+import time
 import httpx
 from typing import AsyncGenerator, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from server.config import settings
 from engine.persona import SYSTEM_PROMPT
+from database.models import AISetting
+
+
+class UserAPIKeyRequiredError(Exception):
+    pass
 
 
 class ChatEngine:
     def __init__(self):
-        self.base_url = settings.api_base_url
-        self.default_model = settings.default_model
-        self.default_api_key = settings.default_api_key
+        self._cache = None
+        self._cache_time = 0
+        self._cache_ttl = 300
 
-    def _get_api_key(self, user_api_key: Optional[str] = None) -> str:
-        if user_api_key and settings.allow_user_keys:
+    async def _get_settings_from_db(self, db: Optional[AsyncSession] = None) -> dict:
+        now = time.time()
+        if self._cache and (now - self._cache_time) < self._cache_ttl:
+            return self._cache
+
+        db_settings = {}
+        if db:
+            try:
+                result = await db.execute(
+                    select(AISetting).where(
+                        AISetting.setting_key.in_([
+                            'api_base_url', 'default_api_key', 'default_model',
+                            'max_tokens', 'temperature', 'allow_user_keys',
+                            'rate_limit_free', 'rate_limit_premium',
+                            'force_user_key',
+                        ])
+                    )
+                )
+                db_settings = {row.setting_key: row.setting_value for row in result.scalars().all()}
+            except Exception:
+                pass
+
+        resolved = {
+            'api_base_url': db_settings.get('api_base_url', settings.api_base_url),
+            'default_api_key': db_settings.get('default_api_key', settings.default_api_key),
+            'default_model': db_settings.get('default_model', settings.default_model),
+            'max_tokens': int(db_settings.get('max_tokens', settings.max_tokens)),
+            'temperature': float(db_settings.get('temperature', settings.temperature)),
+            'allow_user_keys': db_settings.get('allow_user_keys', 'true').lower() == 'true',
+            'force_user_key': db_settings.get('force_user_key', 'false').lower() == 'true',
+        }
+
+        self._cache = resolved
+        self._cache_time = now
+        return resolved
+
+    def invalidate_cache(self):
+        self._cache = None
+        self._cache_time = 0
+
+    def _get_api_key(self, db_settings: dict, user_api_key: Optional[str] = None) -> str:
+        if user_api_key and db_settings.get('allow_user_keys', True):
             return user_api_key
-        return self.default_api_key
+        if db_settings.get('force_user_key', False):
+            raise UserAPIKeyRequiredError(
+                "API key required. Set your API key first: /api sk-your-key-here\n"
+                "Get your free API key at: https://opencode.ai"
+            )
+        return db_settings.get('default_api_key', '')
 
     async def chat_stream(
         self,
         messages: list,
+        db: Optional[AsyncSession] = None,
         user_api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
-        api_key = self._get_api_key(user_api_key)
-        model_name = model or self.default_model
-        temp = temperature if temperature is not None else settings.temperature
-        max_tok = max_tokens if max_tokens is not None else settings.max_tokens
+        db_settings = await self._get_settings_from_db(db)
+        api_key = self._get_api_key(db_settings, user_api_key)
+        model_name = model or db_settings['default_model']
+        temp = temperature if temperature is not None else db_settings['temperature']
+        max_tok = max_tokens if max_tokens is not None else db_settings['max_tokens']
+        base_url = db_settings['api_base_url']
 
         system_message = {"role": "system", "content": SYSTEM_PROMPT}
         full_messages = [system_message] + messages
@@ -36,7 +92,7 @@ class ChatEngine:
         async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream(
                 "POST",
-                f"{self.base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -72,24 +128,29 @@ class ChatEngine:
     async def chat(
         self,
         messages: list,
+        db: Optional[AsyncSession] = None,
         user_api_key: Optional[str] = None,
         model: Optional[str] = None,
     ) -> str:
         full_response = []
         async for chunk in self.chat_stream(
             messages=messages,
+            db=db,
             user_api_key=user_api_key,
             model=model,
         ):
             full_response.append(chunk)
         return "".join(full_response)
 
-    async def list_models(self) -> list:
-        api_key = self._get_api_key()
+    async def list_models(self, db: Optional[AsyncSession] = None) -> list:
+        db_settings = await self._get_settings_from_db(db)
+        api_key = self._get_api_key(db_settings)
+        base_url = db_settings['api_base_url']
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{self.base_url}/models",
+                    f"{base_url}/models",
                     headers={"Authorization": f"Bearer {api_key}"},
                     timeout=10.0,
                 )
