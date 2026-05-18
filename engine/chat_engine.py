@@ -159,8 +159,11 @@ class ChatEngine:
                     return [m["id"] for m in data.get("data", [])]
                 else:
                     print(f"[RDX CLIENT AI] Models API returned status {response.status_code}: {response.text}")
+        except UserAPIKeyRequiredError:
+            # Expected warning when database or API key is not yet configured, silence it
+            pass
         except Exception as e:
-            print(f"[RDX CLIENT AI] Error listing models: {e}")
+            print(f"[RDX CLIENT AI] Unexpected error listing models: {e}")
             pass
         return self._get_default_models()
 
