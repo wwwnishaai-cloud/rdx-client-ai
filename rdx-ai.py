@@ -123,18 +123,9 @@ async def do_api_key():
     return key
 
 # ── Model Selection ─────────────────────────────────────
-def do_model():
-    print(f"\n{C.CYAN}[MODEL]{C.RESET} Select a model:")
-    print(f"  {C.BOLD}1{C.RESET}. llama-3.3-70b-versatile (default, fast)")
-    print(f"  {C.BOLD}2{C.RESET}. llama-3.1-8b-instant (ultra fast)")
-    print(f"  {C.BOLD}3{C.RESET}. mixtral-8x7b-32768 (long context)")
-    print(f"  {C.BOLD}4{C.RESET}. gemma2-9b-it (lightweight)")
-    choice = ask("> ")
-    models = {"1": "llama-3.3-70b-versatile", "2": "llama-3.1-8b-instant",
-              "3": "mixtral-8x7b-32768", "4": "gemma2-9b-it"}
-    model = models.get(choice, "llama-3.3-70b-versatile")
-    ok(f"Model set to: {C.BOLD}{model}{C.RESET}")
-    return model
+# NOTE: do_model() during setup is removed. Model is now controlled by:
+# 1. /model command (fetches live models from server, saves to both local config + server DB)
+# 2. Admin dashboard default_model setting (used when user has no explicit preference)
 
 # ── Chat ────────────────────────────────────────────────
 async def chat_loop(config):
@@ -163,7 +154,9 @@ async def chat_loop(config):
             }
             if config.get("api_key"):
                 payload["user_api_key"] = config["api_key"]
-            if config.get("model"):
+            # Only send model override if user explicitly chose one via /model command.
+            # If not set, the server will use admin's global default_model from ai_settings.
+            if config.get("model") and config["model"] != "__server_default__":
                 payload["model"] = config["model"]
 
             # Determine active model to display
@@ -337,15 +330,22 @@ async def handle_cmd(cmd, config):
         if arg:
             config["model"] = arg
             save_config(config)
+            # Persist on server DB so server uses it
+            async with httpx.AsyncClient(timeout=10) as client:
+                try:
+                    headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
+                    await client.post(f"{AI_SERVER}/model/switch", json={"model": arg}, headers=headers)
+                except Exception:
+                    pass
             ok(f"Model switched to: {arg}")
         else:
-            info("Fetching available models...")
+            info("Fetching available models from OpenCode...")
             async with httpx.AsyncClient(timeout=10) as client:
                 try:
                     headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
                     resp = await client.get(f"{AI_SERVER}/models", headers=headers)
                     if resp.status_code != 200:
-                        err(f"Server returned status {resp.status_code}")
+                        err(f"Server returned status {resp.status_code}: {resp.text[:120]}")
                         return
                     data = resp.json()
                     models = data.get("models", [])
@@ -356,8 +356,8 @@ async def handle_cmd(cmd, config):
                     print(f"\n{C.BOLD}{C.CYAN}Select a Model to Switch:{C.RESET}")
                     active_model = config.get("model")
                     for idx, model in enumerate(models, 1):
-                        is_current = " (Current)" if active_model == model or (not active_model and idx == 1) else ""
-                        print(f"  {C.BOLD}{idx}{C.RESET}. {model}{C.GREEN}{is_current}{C.RESET}")
+                        is_current = f" {C.GREEN}(Active){C.RESET}" if active_model == model else ""
+                        print(f"  {C.BOLD}{idx}{C.RESET}. {model}{is_current}")
                     
                     choice = ask("\nEnter number (or press Enter to keep current): ")
                     if choice.strip():
@@ -367,7 +367,12 @@ async def handle_cmd(cmd, config):
                                 new_model = models[choice_idx]
                                 config["model"] = new_model
                                 save_config(config)
-                                ok(f"Model switched to: {new_model}")
+                                # Persist on server DB
+                                try:
+                                    await client.post(f"{AI_SERVER}/model/switch", json={"model": new_model}, headers=headers)
+                                except Exception:
+                                    pass
+                                ok(f"Model switched to: {C.BOLD}{new_model}{C.RESET}")
                             else:
                                 err("Invalid choice.")
                         except ValueError:
@@ -431,6 +436,14 @@ async def main():
     config = load_config()
 
     if config:
+        # One-time migration: clear stale model saved from old fake hardcoded list.
+        # These models were saved by the old setup flow and bypass the admin global default.
+        stale_defaults = {'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'}
+        if config.get('model') in stale_defaults:
+            config['model'] = None
+            save_config(config)
+            info("Model preference cleared — now using admin's global default. Use /model to pick a model.")
+
         banner()
         print(f"  {C.DIM}Welcome back, {C.BOLD}{config.get('username', 'User')}{C.RESET}{C.DIM}!{C.RESET}")
         await chat_loop(config)

@@ -128,19 +128,34 @@ async def chat_endpoint(
     ]
     messages_for_ai.append({"role": "user", "content": req.message})
 
-    # Fetch global default model from settings
+    # Fetch global default model from AI settings table (set by admin in dashboard)
     result = await db.execute(
         select(AISetting).where(AISetting.setting_key == 'default_model')
     )
     default_setting = result.scalar_one_or_none()
     global_default = default_setting.setting_value if default_setting else 'llama-3.3-70b-versatile'
 
+    # Model priority: (1) explicit req.model, (2) user's preferred_model IF they explicitly switched,
+    # (3) admin's global default from ai_settings
+    # NOTE: preferred_model defaults to 'llama-3.3-70b-versatile' in DB schema — so we
+    # treat it as unset unless the user explicitly switched via /api/model/switch.
+    # The user_record has a 'preferred_model' that starts as the schema default.
+    # We check AISetting for a user-specific override key to know if they explicitly set it.
+    result2 = await db.execute(
+        select(AISetting).where(AISetting.setting_key == f'user_model_{str(user_record.id)}')
+    )
+    user_model_setting = result2.scalar_one_or_none()
+
     model_used = req.model
     if not model_used:
-        if user_record.preferred_model and user_record.preferred_model != 'llama-3.3-70b-versatile':
-            model_used = user_record.preferred_model
+        if user_model_setting and user_model_setting.setting_value:
+            # User explicitly switched model via /model command
+            model_used = user_model_setting.setting_value
         else:
+            # Use admin's global default
             model_used = global_default
+
+    print(f"[RDX AI] Using model: {model_used} (global_default={global_default}, user_override={user_model_setting.setting_value if user_model_setting else None})")
 
     async def generate():
         full_response = ""
@@ -251,25 +266,36 @@ async def list_models(
     user: Optional[dict] = Depends(optional_auth),
 ):
     resolved_api_key = api_key
+
     if not resolved_api_key and user:
-        # Fetch the user's decrypted API key
+        # Try the user's personal API key first
         rdx_user_id = user.get("sub") or user.get("id")
         user_record = await get_or_create_ai_user(db, rdx_user_id)
         if user_record.api_key_encrypted:
             from cryptography.fernet import Fernet
+            import base64
             if settings.is_encryption_configured:
-                key = settings.encryption_key.encode()
-                if len(key) < 32:
-                    key = key.ljust(32, b'\0')
-                key = key[:32]
-                import base64
                 try:
-                    f = Fernet(base64.urlsafe_b64encode(key))
+                    enc_key = settings.encryption_key.encode()[:32].ljust(32, b'\0')
+                    f = Fernet(base64.urlsafe_b64encode(enc_key))
                     resolved_api_key = f.decrypt(user_record.api_key_encrypted.encode()).decode()
                 except Exception:
                     resolved_api_key = user_record.api_key_encrypted
             else:
                 resolved_api_key = user_record.api_key_encrypted
+
+    if not resolved_api_key:
+        # Fall back to the admin-configured default_api_key from ai_settings table
+        result = await db.execute(
+            select(AISetting).where(AISetting.setting_key == 'default_api_key')
+        )
+        admin_key_setting = result.scalar_one_or_none()
+        if admin_key_setting and admin_key_setting.setting_value:
+            resolved_api_key = admin_key_setting.setting_value
+
+    if not resolved_api_key:
+        # Last resort — use the env-configured default key
+        resolved_api_key = settings.default_api_key
 
     models = await chat_engine.list_models(db, api_base_url=api_base_url, api_key=resolved_api_key)
     return {"success": True, "models": models}
@@ -284,7 +310,18 @@ async def switch_model(
     rdx_user_id = user.get("sub") or user.get("id")
     user_record = await get_or_create_ai_user(db, rdx_user_id)
     user_record.preferred_model = req.model
+    # Also persist as explicit user-model setting so we know they intentionally switched
+    result = await db.execute(
+        select(AISetting).where(AISetting.setting_key == f'user_model_{str(user_record.id)}')
+    )
+    user_model_setting = result.scalar_one_or_none()
+    if user_model_setting:
+        user_model_setting.setting_value = req.model
+        user_model_setting.updated_at = datetime.utcnow()
+    else:
+        db.add(AISetting(setting_key=f'user_model_{str(user_record.id)}', setting_value=req.model))
     await db.commit()
+    chat_engine.invalidate_cache()
     return {"success": True, "message": f"Model switched to {req.model}"}
 
 
