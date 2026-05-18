@@ -173,7 +173,11 @@ async def chat_loop(config):
 
                     if resp.status_code != 200:
                         error = await resp.aread()
-                        err(error.decode())
+                        err_text = error.decode(errors='ignore')
+                        if resp.status_code in (502, 503) or "<html" in err_text.lower():
+                            err("AI Server is waking up from sleep mode. Please wait a few seconds and try again!")
+                        else:
+                            err(err_text)
                         continue
 
                     async for line in resp.aiter_lines():
@@ -269,6 +273,13 @@ async def handle_cmd(cmd, config):
             try:
                 resp = await client.get(f"{AI_SERVER}/history",
                     headers={"Authorization": f"Bearer {config.get('jwt_token', '')}"})
+                if resp.status_code != 200:
+                    err_text = resp.text
+                    if resp.status_code in (502, 503) or "<html" in err_text.lower():
+                        err("AI Server is waking up from sleep mode. Please wait a few seconds and try again!")
+                    else:
+                        err(f"Server returned status {resp.status_code}")
+                    return
                 data = resp.json()
                 messages = data.get("messages", [])
                 if not messages:
