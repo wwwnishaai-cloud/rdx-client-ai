@@ -44,53 +44,48 @@ app.add_middleware(
 
 REQUEST_MODELS = {}
 
-RQ = type('', (), {})()
-RQ.ChatRequest = type('ChatRequest', (BaseModel,), {
-    'message': (str, ...),
-    'session_token': (Optional[str], None),
-    'platform': (str, 'terminal'),
-    'platform_user_id': (Optional[str], None),
-    'model': (Optional[str], None),
-    'user_api_key': (Optional[str], None),
-    '__annotations__': {'message': str, 'session_token': Optional[str], 'platform': str, 'platform_user_id': Optional[str], 'model': Optional[str], 'user_api_key': Optional[str]}
-})
+class ChatRequest(BaseModel):
+    message: str
+    session_token: Optional[str] = None
+    platform: str = 'terminal'
+    platform_user_id: Optional[str] = None
+    model: Optional[str] = None
+    user_api_key: Optional[str] = None
 
-RQ.SessionRequest = type('SessionRequest', (BaseModel,), {
-    'platform': (str, 'terminal'),
-    'platform_user_id': (Optional[str], None),
-    '__annotations__': {'platform': str, 'platform_user_id': Optional[str]}
-})
+class SessionRequest(BaseModel):
+    platform: str = 'terminal'
+    platform_user_id: Optional[str] = None
 
-RQ.KeyRequest = type('KeyRequest', (BaseModel,), {
-    'api_key': (str, ...),
-    '__annotations__': {'api_key': str}
-})
+class KeyRequest(BaseModel):
+    api_key: str
 
-RQ.ModelRequest = type('ModelRequest', (BaseModel,), {
-    'model': (str, ...),
-    '__annotations__': {'model': str}
-})
+class ModelRequest(BaseModel):
+    model: str
 
-RQ.ConnectDiscordRequest = type('ConnectDiscordRequest', (BaseModel,), {
-    'token': (str, ...),
-    '__annotations__': {'token': str}
-})
+class ConnectDiscordRequest(BaseModel):
+    token: str
 
-RQ.ConnectTelegramRequest = type('ConnectTelegramRequest', (BaseModel,), {
-    'token': (str, ...),
-    '__annotations__': {'token': str}
-})
+class ConnectTelegramRequest(BaseModel):
+    token: str
 
-RQ.AdminSettingsRequest = type('AdminSettingsRequest', (BaseModel,), {
-    'settings': (dict, ...),
-    '__annotations__': {'settings': dict}
-})
+class AdminSettingsRequest(BaseModel):
+    settings: dict
 
-RQ.AccessGrantRequest = type('AccessGrantRequest', (BaseModel,), {
-    'rdx_user_id': (str, ...),
-    'permissions': (dict, ...),
-    '__annotations__': {'rdx_user_id': str, 'permissions': dict}
-})
+class AccessGrantRequest(BaseModel):
+    rdx_user_id: str
+    permissions: dict
+
+class RQNamespace:
+    ChatRequest = ChatRequest
+    SessionRequest = SessionRequest
+    KeyRequest = KeyRequest
+    ModelRequest = ModelRequest
+    ConnectDiscordRequest = ConnectDiscordRequest
+    ConnectTelegramRequest = ConnectTelegramRequest
+    AdminSettingsRequest = AdminSettingsRequest
+    AccessGrantRequest = AccessGrantRequest
+
+RQ = RQNamespace()
 
 
 
