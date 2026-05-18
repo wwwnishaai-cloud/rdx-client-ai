@@ -42,6 +42,33 @@ async def init_db():
         except Exception:
             pass
 
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT;"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN api_key_encrypted TEXT;"))
+        except Exception:
+            pass
+
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN IF NOT EXISTS preferred_model VARCHAR(64) DEFAULT 'llama-3.3-70b-versatile';"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN preferred_model VARCHAR(64) DEFAULT 'llama-3.3-70b-versatile';"))
+        except Exception:
+            pass
+
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_users ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;"))
+        except Exception:
+            pass
+
         async with async_engine.begin() as conn:
             await conn.execute(text("""
                 INSERT INTO ai_settings (setting_key, setting_value)
