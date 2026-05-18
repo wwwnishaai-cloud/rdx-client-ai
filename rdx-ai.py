@@ -165,38 +165,72 @@ async def chat_loop(config):
             if config.get("model"):
                 payload["model"] = config["model"]
 
-            print(f"\n{C.PURPLE}[RDX AI]{C.RESET} ", end="", flush=True)
+            # Determine active model to display
+            active_model = config.get("model") or "default"
+            print(f"\n{C.PURPLE}[RDX AI]{C.RESET} {C.DIM}({active_model}){C.RESET} ", end="", flush=True)
+
+            # Start background spinner animation
+            spinner_active = True
+            async def spinner_animation():
+                spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                i = 0
+                while spinner_active:
+                    sys.stdout.write(f"{C.CYAN}{spinners[i % len(spinners)]}{C.RESET}")
+                    sys.stdout.flush()
+                    await asyncio.sleep(0.1)
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                    i += 1
+
+            spinner_task = asyncio.create_task(spinner_animation())
 
             async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream("POST", f"{AI_SERVER}/chat",
-                    headers=headers, json=payload) as resp:
+                try:
+                    async with client.stream("POST", f"{AI_SERVER}/chat",
+                        headers=headers, json=payload) as resp:
 
-                    if resp.status_code != 200:
-                        error = await resp.aread()
-                        err_text = error.decode(errors='ignore')
-                        if resp.status_code in (502, 503) or "<html" in err_text.lower():
-                            err("AI Server is waking up from sleep mode. Please wait a few seconds and try again!")
-                        else:
-                            err(err_text)
-                        continue
-
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:]
+                        # Stop spinner once connection is established and response is received
+                        spinner_active = False
                         try:
-                            parsed = json.loads(data)
-                            if parsed.get("done"):
-                                session_token = parsed.get("session_token")
-                                continue
-                            if parsed.get("error"):
-                                print(f"\n{C.RED}{parsed['error']}{C.RESET}")
-                                break
-                            content = parsed.get("content", "")
-                            print(content, end="", flush=True)
-                        except json.JSONDecodeError:
+                            spinner_task.cancel()
+                            await spinner_task
+                        except Exception:
                             pass
-                    print()
+
+                        if resp.status_code != 200:
+                            error = await resp.aread()
+                            err_text = error.decode(errors='ignore')
+                            if resp.status_code in (502, 503) or "<html" in err_text.lower():
+                                err("AI Server is waking up from sleep mode. Please wait a few seconds and try again!")
+                            else:
+                                err(err_text)
+                            continue
+
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data = line[6:]
+                            try:
+                                parsed = json.loads(data)
+                                if parsed.get("done"):
+                                    session_token = parsed.get("session_token")
+                                    continue
+                                if parsed.get("error"):
+                                    print(f"\n{C.RED}{parsed['error']}{C.RESET}")
+                                    break
+                                content = parsed.get("content", "")
+                                print(content, end="", flush=True)
+                            except json.JSONDecodeError:
+                                pass
+                        print()
+                except Exception as e:
+                    spinner_active = False
+                    try:
+                        spinner_task.cancel()
+                        await spinner_task
+                    except Exception:
+                        pass
+                    err(str(e))
 
         except KeyboardInterrupt:
             print(f"\n{C.DIM}Goodbye!{C.RESET}")
@@ -216,8 +250,9 @@ async def handle_cmd(cmd, config):
   {C.CYAN}/help{C.RESET}          — Show this help
   {C.CYAN}/api <key>{C.RESET}     — Set/change API key
   {C.CYAN}/api{C.RESET}           — Show current API key
-  {C.CYAN}/model <name>{C.RESET}  — Switch model
-  {C.CYAN}/model{C.RESET}         — Show current model
+  {C.CYAN}/models{C.RESET}        — List all available models on OpenCode
+  {C.CYAN}/model <name>{C.RESET}  — Switch to a specific model
+  {C.CYAN}/model{C.RESET}         — Choose available models interactively
   {C.CYAN}/history{C.RESET}       — Show chat history
   {C.CYAN}/clear{C.RESET}         — Clear session
   {C.CYAN}/status{C.RESET}        — Server status
@@ -239,13 +274,69 @@ async def handle_cmd(cmd, config):
             else:
                 info("No API key set. Using default.")
 
+    elif command == '/models':
+        info("Fetching available models from OpenCode...")
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
+                resp = await client.get(f"{AI_SERVER}/models", headers=headers)
+                if resp.status_code != 200:
+                    err(f"Server returned status {resp.status_code}")
+                    return
+                data = resp.json()
+                models = data.get("models", [])
+                if not models:
+                    info("No models returned from server.")
+                else:
+                    print(f"\n{C.BOLD}{C.CYAN}Available Models on OpenCode:{C.RESET}")
+                    for idx, model in enumerate(models, 1):
+                        is_current = " (Active)" if config.get("model") == model else ""
+                        print(f"  {C.BOLD}{idx}{C.RESET}. {model}{C.GREEN}{is_current}{C.RESET}")
+                    print(f"\n{C.DIM}Type '/model <name>' or run '/model' to switch!{C.RESET}")
+            except Exception as e:
+                err(f"Failed to fetch models: {e}")
+
     elif command == '/model':
         if arg:
             config["model"] = arg
             save_config(config)
             ok(f"Model switched to: {arg}")
         else:
-            info(f"Current model: {config.get('model', 'default')}")
+            info("Fetching available models...")
+            async with httpx.AsyncClient(timeout=10) as client:
+                try:
+                    headers = {"Authorization": f"Bearer {config.get('jwt_token', '')}"}
+                    resp = await client.get(f"{AI_SERVER}/models", headers=headers)
+                    if resp.status_code != 200:
+                        err(f"Server returned status {resp.status_code}")
+                        return
+                    data = resp.json()
+                    models = data.get("models", [])
+                    if not models:
+                        info("No models returned from server.")
+                        return
+                    
+                    print(f"\n{C.BOLD}{C.CYAN}Select a Model to Switch:{C.RESET}")
+                    active_model = config.get("model")
+                    for idx, model in enumerate(models, 1):
+                        is_current = " (Current)" if active_model == model or (not active_model and idx == 1) else ""
+                        print(f"  {C.BOLD}{idx}{C.RESET}. {model}{C.GREEN}{is_current}{C.RESET}")
+                    
+                    choice = ask("\nEnter number (or press Enter to keep current): ")
+                    if choice.strip():
+                        try:
+                            choice_idx = int(choice) - 1
+                            if 0 <= choice_idx < len(models):
+                                new_model = models[choice_idx]
+                                config["model"] = new_model
+                                save_config(config)
+                                ok(f"Model switched to: {new_model}")
+                            else:
+                                err("Invalid choice.")
+                        except ValueError:
+                            err("Invalid input. Please enter a number.")
+                except Exception as e:
+                    err(f"Failed to fetch models: {e}")
 
     elif command == '/status':
         async with httpx.AsyncClient(timeout=10) as client:
