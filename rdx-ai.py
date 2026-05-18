@@ -11,6 +11,7 @@ import json
 import uuid
 import webbrowser
 import time
+import random
 
 try:
     import httpx
@@ -202,7 +203,8 @@ async def chat_loop(config):
                         except Exception:
                             pass
                     
-                    await asyncio.sleep(0.1)
+                    # Organic random delay between 50ms and 150ms like Claude Code CLI!
+                    await asyncio.sleep(random.uniform(0.05, 0.15))
                     
                     # Erase exactly the printed characters
                     erase_len = 2 + len(phrase)

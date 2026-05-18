@@ -248,8 +248,30 @@ async def list_models(
     api_base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     db: AsyncSession = Depends(get_session),
+    user: Optional[dict] = Depends(optional_auth),
 ):
-    models = await chat_engine.list_models(db, api_base_url=api_base_url, api_key=api_key)
+    resolved_api_key = api_key
+    if not resolved_api_key and user:
+        # Fetch the user's decrypted API key
+        rdx_user_id = user.get("sub") or user.get("id")
+        user_record = await get_or_create_ai_user(db, rdx_user_id)
+        if user_record.api_key_encrypted:
+            from cryptography.fernet import Fernet
+            if settings.is_encryption_configured:
+                key = settings.encryption_key.encode()
+                if len(key) < 32:
+                    key = key.ljust(32, b'\0')
+                key = key[:32]
+                import base64
+                try:
+                    f = Fernet(base64.urlsafe_b64encode(key))
+                    resolved_api_key = f.decrypt(user_record.api_key_encrypted.encode()).decode()
+                except Exception:
+                    resolved_api_key = user_record.api_key_encrypted
+            else:
+                resolved_api_key = user_record.api_key_encrypted
+
+    models = await chat_engine.list_models(db, api_base_url=api_base_url, api_key=resolved_api_key)
     return {"success": True, "models": models}
 
 
