@@ -14,9 +14,11 @@ from sqlalchemy import select, func, and_
 from server.config import settings
 from server.auth import get_current_user, get_or_create_ai_user, optional_auth
 from database.migrations import init_db, get_session
-from database.models import AIUser, AISetting, AIDashboardAccess, AISession, AIMessage
+from database.models import AIUser, AISetting, AIDashboardAccess, AISession, AIMessage, AITask, AIRoutine
 from engine.chat_engine import ChatEngine, UserAPIKeyRequiredError
 from engine.memory_manager import memory_manager
+from engine.scheduler import scheduler, load_routines, add_routine_job, remove_routine_job, extract_task_action
+from database.migrations import async_session_factory
 
 chat_engine = ChatEngine()
 
@@ -24,7 +26,10 @@ chat_engine = ChatEngine()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    scheduler.start()
+    await load_routines()
     yield
+    scheduler.shutdown()
 
 app = FastAPI(
     title="RDX Client AI Server",
@@ -75,6 +80,21 @@ class AccessGrantRequest(BaseModel):
     rdx_user_id: str
     permissions: dict
 
+class TaskCreateRequest(BaseModel):
+    task_type: str
+    scheduled_at: str
+    data: Optional[dict] = None
+
+class RoutineCreateRequest(BaseModel):
+    task_type: str
+    cron_expression: str
+    data: Optional[dict] = None
+
+class RoutineUpdateRequest(BaseModel):
+    is_active: Optional[bool] = None
+    cron_expression: Optional[str] = None
+    data: Optional[dict] = None
+
 class RQNamespace:
     ChatRequest = ChatRequest
     SessionRequest = SessionRequest
@@ -84,6 +104,9 @@ class RQNamespace:
     ConnectTelegramRequest = ConnectTelegramRequest
     AdminSettingsRequest = AdminSettingsRequest
     AccessGrantRequest = AccessGrantRequest
+    TaskCreateRequest = TaskCreateRequest
+    RoutineCreateRequest = RoutineCreateRequest
+    RoutineUpdateRequest = RoutineUpdateRequest
 
 RQ = RQNamespace()
 
@@ -180,6 +203,44 @@ async def chat_endpoint(
         await memory_manager.save_message(
             db, session, "assistant", full_response, req.platform, model_used
         )
+
+        action = extract_task_action(full_response)
+        if action:
+            try:
+                if action.get("action") == "schedule_task":
+                    from datetime import datetime as dt
+                    scheduled = dt.fromisoformat(action["time"])
+                    new_task = AITask(
+                        user_id=user_record.id,
+                        task_type=action.get("task_type", "custom"),
+                        scheduled_at=scheduled,
+                        data=action.get("data"),
+                    )
+                    db.add(new_task)
+                    await db.commit()
+                    await db.refresh(new_task)
+                    from apscheduler.triggers.date import DateTrigger
+                    scheduler.add_job(
+                        "engine.scheduler:execute_task",
+                        trigger=DateTrigger(scheduled),
+                        args=[new_task.id],
+                        id=f"task_{new_task.id}",
+                        replace_existing=True,
+                    )
+                elif action.get("action") == "create_routine":
+                    new_routine = AIRoutine(
+                        user_id=user_record.id,
+                        task_type=action.get("task_type", "custom"),
+                        cron_expression=action["cron"],
+                        data=action.get("data"),
+                    )
+                    db.add(new_routine)
+                    await db.commit()
+                    await db.refresh(new_routine)
+                    add_routine_job(new_routine)
+            except Exception:
+                pass
+
         yield f"data: {json.dumps({'done': True, 'session_token': session_token})}\n\n"
 
     return StreamingResponse(
@@ -603,3 +664,203 @@ async def get_access(
             "can_manage_security": access.can_manage_security,
         },
     }
+
+
+# ─── TASK SCHEDULER ENDPOINTS ──────────────────────────────────
+
+
+@app.post("/api/tasks/create")
+async def create_task(
+    req: RQ.TaskCreateRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    try:
+        scheduled = datetime.fromisoformat(req.scheduled_at)
+    except (ValueError, TypeError):
+        return {"success": False, "message": "Invalid datetime format. Use ISO format: YYYY-MM-DDTHH:MM:SS"}
+
+    task = AITask(
+        user_id=user_record.id,
+        task_type=req.task_type,
+        scheduled_at=scheduled,
+        data=req.data,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    from engine.scheduler import scheduler
+    from apscheduler.triggers.date import DateTrigger
+    scheduler.add_job(
+        "engine.scheduler:execute_task",
+        trigger=DateTrigger(scheduled),
+        args=[task.id],
+        id=f"task_{task.id}",
+        replace_existing=True,
+    )
+
+    return {"success": True, "task_id": task.id, "scheduled_at": req.scheduled_at}
+
+
+@app.get("/api/tasks")
+async def list_tasks(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    result = await db.execute(
+        select(AITask)
+        .where(AITask.user_id == user_record.id)
+        .order_by(AITask.scheduled_at.asc())
+    )
+    tasks = result.scalars().all()
+    return {
+        "success": True,
+        "tasks": [
+            {
+                "id": t.id,
+                "task_type": t.task_type,
+                "status": t.status,
+                "scheduled_at": t.scheduled_at.isoformat() if t.scheduled_at else None,
+                "data": t.data,
+                "result": t.result,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in tasks
+        ],
+    }
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(
+    task_id: int,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    result = await db.execute(
+        select(AITask).where(AITask.id == task_id, AITask.user_id == user_record.id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        return {"success": False, "message": "Task not found"}
+    await db.delete(task)
+    await db.commit()
+    return {"success": True, "message": "Task deleted"}
+
+
+@app.post("/api/routines/create")
+async def create_routine(
+    req: RQ.RoutineCreateRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+
+    routine = AIRoutine(
+        user_id=user_record.id,
+        task_type=req.task_type,
+        cron_expression=req.cron_expression,
+        data=req.data,
+    )
+    db.add(routine)
+    await db.commit()
+    await db.refresh(routine)
+
+    add_routine_job(routine)
+    return {"success": True, "routine_id": routine.id}
+
+
+@app.get("/api/routines")
+async def list_routines(
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    result = await db.execute(
+        select(AIRoutine)
+        .where(AIRoutine.user_id == user_record.id)
+        .order_by(AIRoutine.created_at.desc())
+    )
+    routines = result.scalars().all()
+    return {
+        "success": True,
+        "routines": [
+            {
+                "id": r.id,
+                "task_type": r.task_type,
+                "cron_expression": r.cron_expression,
+                "is_active": r.is_active,
+                "data": r.data,
+                "last_run": r.last_run.isoformat() if r.last_run else None,
+                "next_run": r.next_run.isoformat() if r.next_run else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in routines
+        ],
+    }
+
+
+@app.put("/api/routines/{routine_id}")
+async def update_routine(
+    routine_id: int,
+    req: RQ.RoutineUpdateRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    result = await db.execute(
+        select(AIRoutine).where(
+            AIRoutine.id == routine_id, AIRoutine.user_id == user_record.id
+        )
+    )
+    routine = result.scalar_one_or_none()
+    if not routine:
+        return {"success": False, "message": "Routine not found"}
+
+    if req.is_active is not None:
+        routine.is_active = req.is_active
+    if req.cron_expression is not None:
+        routine.cron_expression = req.cron_expression
+    if req.data is not None:
+        routine.data = req.data
+
+    await db.commit()
+    await db.refresh(routine)
+
+    remove_routine_job(routine_id)
+    if routine.is_active:
+        add_routine_job(routine)
+
+    return {"success": True, "message": "Routine updated"}
+
+
+@app.delete("/api/routines/{routine_id}")
+async def delete_routine(
+    routine_id: int,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    rdx_user_id = user.get("sub") or user.get("id")
+    user_record = await get_or_create_ai_user(db, rdx_user_id)
+    result = await db.execute(
+        select(AIRoutine).where(
+            AIRoutine.id == routine_id, AIRoutine.user_id == user_record.id
+        )
+    )
+    routine = result.scalar_one_or_none()
+    if not routine:
+        return {"success": False, "message": "Routine not found"}
+
+    remove_routine_job(routine_id)
+    await db.delete(routine)
+    await db.commit()
+    return {"success": True, "message": "Routine deleted"}

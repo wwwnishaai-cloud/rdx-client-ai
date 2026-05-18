@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, BigInteger, String, Text, ForeignKey, DateTime, Boolean
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -83,3 +84,35 @@ class AIDashboardAccess(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user = relationship('AIUser', backref='dashboard_access')
+
+
+class AITask(Base):
+    __tablename__ = 'ai_tasks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('ai_users.id'), nullable=False, index=True)
+    task_type = Column(String(50), nullable=False)
+    status = Column(String(20), default='pending')
+    scheduled_at = Column(DateTime, nullable=False)
+    data = Column(JSON, nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    executed_at = Column(DateTime, nullable=True)
+
+    user = relationship('AIUser', backref='tasks')
+
+
+class AIRoutine(Base):
+    __tablename__ = 'ai_routines'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('ai_users.id'), nullable=False, index=True)
+    task_type = Column(String(50), nullable=False)
+    cron_expression = Column(String(50), nullable=False)
+    is_active = Column(Boolean, default=True)
+    data = Column(JSON, nullable=True)
+    last_run = Column(DateTime, nullable=True)
+    next_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship('AIUser', backref='routines')
