@@ -51,9 +51,9 @@ def setup_banner():
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)
 
-def ok(msg): print(f"{C.GREEN}[OK]{C.RESET} {msg}")
-def err(msg): print(f"{C.RED}[ERROR]{C.RESET} {msg}")
-def info(msg): print(f"{C.CYAN}[INFO]{C.RESET} {msg}")
+def ok(msg, **kwargs): print(f"{C.GREEN}[OK]{C.RESET} {msg}", **kwargs)
+def err(msg, **kwargs): print(f"{C.RED}[ERROR]{C.RESET} {msg}", **kwargs)
+def info(msg, **kwargs): print(f"{C.CYAN}[INFO]{C.RESET} {msg}", **kwargs)
 def ask(msg): return input(f"{C.YELLOW}[?]{C.RESET} {msg}").strip()
 
 # ── Config ──────────────────────────────────────────────
