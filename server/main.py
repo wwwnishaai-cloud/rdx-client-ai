@@ -128,7 +128,19 @@ async def chat_endpoint(
     ]
     messages_for_ai.append({"role": "user", "content": req.message})
 
-    model_used = req.model or user_record.preferred_model
+    # Fetch global default model from settings
+    result = await db.execute(
+        select(AISetting).where(AISetting.setting_key == 'default_model')
+    )
+    default_setting = result.scalar_one_or_none()
+    global_default = default_setting.setting_value if default_setting else 'llama-3.3-70b-versatile'
+
+    model_used = req.model
+    if not model_used:
+        if user_record.preferred_model and user_record.preferred_model != 'llama-3.3-70b-versatile':
+            model_used = user_record.preferred_model
+        else:
+            model_used = global_default
 
     async def generate():
         full_response = ""
