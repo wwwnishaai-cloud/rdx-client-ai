@@ -63,6 +63,30 @@ async def init_db():
         try:
             async with async_engine.begin() as conn:
                 if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN is_active BOOLEAN DEFAULT TRUE;"))
+        except Exception:
+            pass
+
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP;"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN last_active DATETIME DEFAULT CURRENT_TIMESTAMP;"))
+        except Exception:
+            pass
+
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS model_used VARCHAR(64);"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_messages ADD COLUMN model_used VARCHAR(64);"))
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
                     await conn.execute(text("ALTER TABLE ai_users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;"))
                 else:
                     await conn.execute(text("ALTER TABLE ai_users ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;"))
