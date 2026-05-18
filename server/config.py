@@ -6,14 +6,16 @@ load_dotenv()
 
 class Settings:
     def __init__(self):
-        self.database_url = os.getenv(
+        db_url = os.getenv(
             'DATABASE_URL',
             'postgresql+asyncpg://postgres:postgres@localhost:5432/rdx_client_ai'
         )
-        self.sync_database_url = os.getenv(
-            'SYNC_DATABASE_URL',
-            'postgresql://postgres:postgres@localhost:5432/rdx_client_ai'
-        )
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        self.database_url = db_url
+
         self.rdx_auth_secret = os.getenv('RDX_AUTH_SECRET', '')
         self.rdx_main_server = os.getenv(
             'RDX_MAIN_SERVER', 'https://rdx-auth-recreate.onrender.com'
