@@ -23,6 +23,25 @@ async def init_db():
             await conn.run_sync(Base.metadata.create_all)
         print("[AI-DB] Database tables created/verified.")
 
+        # Self-healing migrations for existing tables
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS platform_user_id VARCHAR(128);"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_sessions ADD COLUMN platform_user_id VARCHAR(128);"))
+        except Exception:
+            pass
+
+        try:
+            async with async_engine.begin() as conn:
+                if "postgres" in settings.database_url or "postgresql" in settings.database_url:
+                    await conn.execute(text("ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS tokens_used INTEGER DEFAULT 0;"))
+                else:
+                    await conn.execute(text("ALTER TABLE ai_messages ADD COLUMN tokens_used INTEGER DEFAULT 0;"))
+        except Exception:
+            pass
+
         async with async_engine.begin() as conn:
             await conn.execute(text("""
                 INSERT INTO ai_settings (setting_key, setting_value)
